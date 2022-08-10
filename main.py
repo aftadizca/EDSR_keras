@@ -30,7 +30,7 @@ full_model_callback = tf.keras.callbacks.ModelCheckpoint(
     save_best_only=True)
 
 weight_only_callback = tf.keras.callbacks.ModelCheckpoint(
-    filepath='my_weight',
+    filepath='my_weight/edsr-1-{val_loss:.2f}-.h5',
     save_weights_only=True,
     monitor='val_loss',
     mode='min',
@@ -132,6 +132,12 @@ for i in range(9):
     plt.title(lowres[i].shape)
     plt.axis("off")
 
+# Using adam optimizer with initial learning rate as 1e-4, changing learning rate after 5000 steps to 5e-5
+optim_edsr = keras.optimizers.Adam(
+    learning_rate=keras.optimizers.schedules.PiecewiseConstantDecay(
+        boundaries=[5000], values=[1e-4, 5e-5]
+    )
+)
 
 def PSNR(super_resolution, high_resolution):
     """Compute the peak signal-to-noise ratio, measures quality of image."""
@@ -211,52 +217,43 @@ def make_model(num_filters, num_of_residual_blocks):
     output_layer = layers.Rescaling(scale=255)(x)
     return EDSRModel(input_layer, output_layer)
 
-def train():
+def train(modelpath):
     model = make_model(num_filters=64, num_of_residual_blocks=16)
+    # model.load_weights(modelpath)
     # model = keras.models.load_model("my_models", custom_objects={"PSNR":PSNR})
-    # Using adam optimizer with initial learning rate as 1e-4, changing learning rate after 5000 steps to 5e-5
-    optim_edsr = keras.optimizers.Adam(
-        learning_rate=keras.optimizers.schedules.PiecewiseConstantDecay(
-            boundaries=[5000], values=[1e-4, 5e-5]
-        )
-    )
     # Compiling model with loss as mean absolute error(L1 Loss) and metric as psnr
     model.compile(optimizer=optim_edsr, loss="mae", metrics=[PSNR])
     # Training for more epochs will improve results
     model.fit(train_ds, epochs=100, steps_per_epoch=200, validation_data=val_ds, callbacks=[weight_only_callback])
 
-def test():
-    # model_load = make_model(num_filters=64, num_of_residual_blocks=16)
-    model_load = keras.models.load_model("my_models", custom_objects={"PSNR":PSNR})
+def test(modelpath):
+    model_load = make_model(num_filters=64, num_of_residual_blocks=16)
+    model_load.load_weights(modelpath)
     model_load.summary()
     # model_load.summary()
-    def plot_results(lowres, preds):
-        """
-        Displays low resolution image and super resolution image
-        """
-        plt.figure(figsize=(24, 14))
-        plt.subplot(132), plt.imshow(lowres), plt.title("Low resolution")
-        plt.subplot(133), plt.imshow(preds), plt.title("Prediction")
-        plt.show()
+    # def plot_results(lowres, preds):
+    #     """
+    #     Displays low resolution image and super resolution image
+    #     """
+    #     plt.figure(figsize=(24, 14))
+    #     plt.subplot(132), plt.imshow(lowres), plt.title("Low resolution")
+    #     plt.subplot(133), plt.imshow(preds), plt.title("Prediction")
+    #     plt.show()
 
+    # # for lowres, highres in val.take(10):
+    # # lowres = tf.image.random_crop(lowres, (150, 150, 3))
+    # lowres = Image.open("C:\\Users\\zaha-pc\\Desktop\\753125.jpg")
+    # lowres = lowres.convert('RGB')
+    # lowres = np.array(lowres)
+    
+    # # lowres = np.reshape(lowres, (1, 150,150,3))
+    # # print(lowres.shape)
+    # preds = model_load.predict_step(lowres)
 
-    # for lowres, highres in val.take(10):
-    # lowres = tf.image.random_crop(lowres, (150, 150, 3))
-    lowres = Image.open("asasasasasasas.png")
-    lowres = lowres.convert('RGB')
-    lowres = np.array(lowres)
-    img = tf.cast(tf.expand_dims(lowres, axis=0), tf.float32)
-    # lowres = np.reshape(lowres, (1, 150,150,3))
-    # print(lowres.shape)
-    preds = model_load.predict_step(img)
-    preds = tf.clip_by_value(preds, 0, 255)
-    preds = tf.round(preds)
-    preds = tf.squeeze(
-        tf.cast(preds, tf.uint8), axis=0
-    )
-    # plot_results(lowres, preds)
-    image = Image.fromarray(preds.numpy())
-    image.save('output.png', format='PNG')
+    # # plot_results(lowres, preds)
+    # image = Image.fromarray(preds.numpy())
+    # image.save('output.png', format='PNG')
 
 if __name__=='__main__':
-    print("True")
+    train('my_weight\models-5.58.h5')
+    # test()
