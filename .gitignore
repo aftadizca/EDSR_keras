@@ -1,0 +1,12 @@
+__pycache__
+logs/*
+*.hdf5
+*.hdf5.back
+*.tflite
+*.zip
+py37/
+DIV2K_train_HR/
+my_models/
+models
+*.png
+*.jpg
