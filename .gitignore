@@ -10,3 +10,4 @@ my_models/
 models
 *.png
 *.jpg
+my_weight/

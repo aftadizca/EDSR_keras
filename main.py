@@ -7,7 +7,24 @@ from PIL import Image
 from tensorflow import keras
 from tensorflow.keras import layers
 import logging
+import os
+import sys
+import cv2
+
+# disable gpu $env:DML_VISIBLE_DEVICES = -1
+# os.environ["DML_VISIBLE_DEVICES"]="-1"
+# print(os.environ["DML_VISIBLE_DEVICES"])
 logging.getLogger("tensorflow").setLevel(logging.ERROR)
+
+
+modelLoadPath = 'my_weight\edsrv4_1.h5'
+modelSavePath = 'my_weight\edsrv4_1.h5'
+learningRate = 25e-6
+
+# Allow memory growth for the GPU
+# physical_devices = tf.config.experimental.list_physical_devices('GPU')
+# print(physical_devices)
+# tf.config.experimental.set_memory_growth(physical_devices[0], True)
 
 AUTOTUNE = tf.data.AUTOTUNE
 
@@ -30,11 +47,13 @@ full_model_callback = tf.keras.callbacks.ModelCheckpoint(
     save_best_only=True)
 
 weight_only_callback = tf.keras.callbacks.ModelCheckpoint(
-    filepath='my_weight/edsr-1-{val_loss:.2f}-.h5',
+    filepath=modelSavePath,
     save_weights_only=True,
     monitor='val_loss',
     mode='min',
-    save_best_only=True)
+    save_best_only=True,
+    verbose=1)
+
 
 def flip_left_right(lowres_img, highres_img):
     """Flips Images to left and right."""
@@ -52,6 +71,7 @@ def flip_left_right(lowres_img, highres_img):
         ),
     )
 
+
 def random_rotate(lowres_img, highres_img):
     """Rotates Images by 90 degrees."""
 
@@ -60,7 +80,8 @@ def random_rotate(lowres_img, highres_img):
     # Here rn signifies number of times the image(s) are rotated by 90 degrees
     return tf.image.rot90(lowres_img, rn), tf.image.rot90(highres_img, rn)
 
-def random_crop(lowres_img, highres_img, hr_crop_size=96, scale=4):
+
+def random_crop(lowres_img, highres_img, hr_crop_size=192, scale=4):
     """Crop images.
 
     low resolution images: 24x24
@@ -80,15 +101,16 @@ def random_crop(lowres_img, highres_img, hr_crop_size=96, scale=4):
     highres_height = lowres_height * scale
 
     lowres_img_cropped = lowres_img[
-        lowres_height : lowres_height + lowres_crop_size,
-        lowres_width : lowres_width + lowres_crop_size,
+        lowres_height: lowres_height + lowres_crop_size,
+        lowres_width: lowres_width + lowres_crop_size,
     ]  # 24x24
     highres_img_cropped = highres_img[
-        highres_height : highres_height + hr_crop_size,
-        highres_width : highres_width + hr_crop_size,
+        highres_height: highres_height + hr_crop_size,
+        highres_width: highres_width + hr_crop_size,
     ]  # 96x96
 
     return lowres_img_cropped, highres_img_cropped
+
 
 def dataset_object(dataset_cache, training=True):
 
@@ -111,39 +133,60 @@ def dataset_object(dataset_cache, training=True):
     ds = ds.prefetch(buffer_size=AUTOTUNE)
     return ds
 
+
 train_ds = dataset_object(train_cache, training=True)
 val_ds = dataset_object(val_cache, training=False)
 
 lowres, highres = next(iter(train_ds))
 
-# Hight Resolution Images
-plt.figure(figsize=(10, 10))
-for i in range(9):
-    ax = plt.subplot(3, 3, i + 1)
-    plt.imshow(highres[i].numpy().astype("uint8"))
-    plt.title(highres[i].shape)
-    plt.axis("off")
+# # Hight Resolution Images
+# plt.figure(figsize=(10, 10))
+# for i in range(9):
+#     ax = plt.subplot(3, 3, i + 1)
+#     plt.imshow(highres[i].numpy().astype("uint8"))
+#     plt.title(highres[i].shape)
+#     plt.axis("off")
 
-# Low Resolution Images
-plt.figure(figsize=(10, 10))
-for i in range(9):
-    ax = plt.subplot(3, 3, i + 1)
-    plt.imshow(lowres[i].numpy().astype("uint8"))
-    plt.title(lowres[i].shape)
-    plt.axis("off")
+# # Low Resolution Images
+# plt.figure(figsize=(10, 10))
+# for i in range(9):
+#     ax = plt.subplot(3, 3, i + 1)
+#     plt.imshow(lowres[i].numpy().astype("uint8"))
+#     plt.title(lowres[i].shape)
+#     plt.axis("off")
 
 # Using adam optimizer with initial learning rate as 1e-4, changing learning rate after 5000 steps to 5e-5
+# optim_edsr = keras.optimizers.Adam(
+#     learning_rate=keras.optimizers.schedules.PiecewiseConstantDecay(
+#         boundaries=[1000], values=[1e-4, 5e-5]
+#     )
+# )
+
 optim_edsr = keras.optimizers.Adam(
-    learning_rate=keras.optimizers.schedules.PiecewiseConstantDecay(
-        boundaries=[5000], values=[1e-4, 5e-5]
-    )
+    learning_rate=learningRate,
+    beta_1=0.9,
+    beta_2=0.999,
+    epsilon=1e-08,
+    amsgrad=False,
+    name="Adam"
 )
+
 
 def PSNR(super_resolution, high_resolution):
     """Compute the peak signal-to-noise ratio, measures quality of image."""
     # Max value of pixel is 255
-    psnr_value = tf.image.psnr(high_resolution, super_resolution, max_val=255)[0]
+    psnr_value = tf.image.psnr(
+        high_resolution, super_resolution, max_val=255)[0]
     return psnr_value
+
+
+def SSIM(super_resolution, high_resolution):
+    """Compute the peak signal-to-noise ratio, measures quality of image."""
+    # Max value of pixel is 255
+    ssim_value = tf.image.ssim(
+        high_resolution, super_resolution, max_val=255)[0]
+    return ssim_value
+
 
 class EDSRModel(tf.keras.Model):
     def train_step(self, data):
@@ -155,7 +198,8 @@ class EDSRModel(tf.keras.Model):
             y_pred = self(x, training=True)  # Forward pass
             # Compute the loss value
             # (the loss function is configured in `compile()`)
-            loss = self.compiled_loss(y, y_pred, regularization_losses=self.losses)
+            loss = self.compiled_loss(
+                y, y_pred, regularization_losses=self.losses)
 
         # Compute gradients
         trainable_vars = self.trainable_variables
@@ -182,20 +226,37 @@ class EDSRModel(tf.keras.Model):
         )
         return super_resolution_img
 
+
+def expand(img_arr):
+    return tf.cast(tf.expand_dims(img_arr, axis=0), tf.float32)
+
+
+def squeeze(img_arr):
+    img_arr = tf.clip_by_value(img_arr, 0, 255)
+    # Rounds the values of a tensor to the nearest integer
+    img_arr = tf.round(img_arr)
+    # Removes dimensions of size 1 from the shape of a tensor and converting to uint8
+    img_arr = tf.squeeze(
+        tf.cast(img_arr, tf.uint8), axis=0
+    )
+    return img_arr
+
 # Residual Block
 def ResBlock(inputs):
-    x = layers.Conv2D(64, 3, padding="same", activation="relu")(inputs)
-    x = layers.Conv2D(64, 3, padding="same")(x)
+    x = layers.Conv2D(256, 3, padding="same", activation="relu")(inputs)
+    x = layers.Conv2D(256, 3, padding="same")(x)
     x = layers.Add()([inputs, x])
+    # x = layers.Lambda(lambda t: t * 0.1)(x)
     return x
 
 # Upsampling Block
 def Upsampling(inputs, factor=2, **kwargs):
-    x = layers.Conv2D(64 * (factor ** 2), 3, padding="same", **kwargs)(inputs)
+    x = layers.Conv2D(256 * (factor ** 2), 3, padding="same", **kwargs)(inputs)
     x = tf.nn.depth_to_space(x, block_size=factor)
-    x = layers.Conv2D(64 * (factor ** 2), 3, padding="same", **kwargs)(x)
+    x = layers.Conv2D(256 * (factor ** 2), 3, padding="same", **kwargs)(x)
     x = tf.nn.depth_to_space(x, block_size=factor)
     return x
+
 
 def make_model(num_filters, num_of_residual_blocks):
     # Flexible Inputs to input_layer
@@ -217,43 +278,45 @@ def make_model(num_filters, num_of_residual_blocks):
     output_layer = layers.Rescaling(scale=255)(x)
     return EDSRModel(input_layer, output_layer)
 
-def train(modelpath):
-    model = make_model(num_filters=64, num_of_residual_blocks=16)
-    # model.load_weights(modelpath)
+
+def train(epochs, modelpath=None):
+    model = make_model(num_filters=256, num_of_residual_blocks=32)
+    if modelpath:
+        print('Load model weight')
+        model.load_weights(modelpath)
     # model = keras.models.load_model("my_models", custom_objects={"PSNR":PSNR})
     # Compiling model with loss as mean absolute error(L1 Loss) and metric as psnr
-    model.compile(optimizer=optim_edsr, loss="mae", metrics=[PSNR])
+    model.compile(optimizer=optim_edsr,
+                  loss=tf.keras.losses.MeanAbsoluteError(), metrics=[PSNR])
+    model.summary()
     # Training for more epochs will improve results
-    model.fit(train_ds, epochs=100, steps_per_epoch=200, validation_data=val_ds, callbacks=[weight_only_callback])
+    model.fit(train_ds, epochs=epochs, steps_per_epoch=100,
+              validation_data=val_ds, callbacks=[weight_only_callback])
 
-def test(modelpath):
-    model_load = make_model(num_filters=64, num_of_residual_blocks=16)
+
+def test(modelpath, input_img_path, output_img_path):
+    model_load = make_model(num_filters=256, num_of_residual_blocks=32)
     model_load.load_weights(modelpath)
     model_load.summary()
-    # model_load.summary()
-    # def plot_results(lowres, preds):
-    #     """
-    #     Displays low resolution image and super resolution image
-    #     """
-    #     plt.figure(figsize=(24, 14))
-    #     plt.subplot(132), plt.imshow(lowres), plt.title("Low resolution")
-    #     plt.subplot(133), plt.imshow(preds), plt.title("Prediction")
-    #     plt.show()
 
-    # # for lowres, highres in val.take(10):
-    # # lowres = tf.image.random_crop(lowres, (150, 150, 3))
-    # lowres = Image.open("C:\\Users\\zaha-pc\\Desktop\\753125.jpg")
-    # lowres = lowres.convert('RGB')
-    # lowres = np.array(lowres)
+    lowres = Image.open(input_img_path)
+    lowres = lowres.convert('RGB')
+    w, h = lowres.size
     
-    # # lowres = np.reshape(lowres, (1, 150,150,3))
-    # # print(lowres.shape)
-    # preds = model_load.predict_step(lowres)
+    lowres = np.array(lowres)
+ 
+    preds = model_load.predict(lowres)
 
-    # # plot_results(lowres, preds)
-    # image = Image.fromarray(preds.numpy())
-    # image.save('output.png', format='PNG')
+    image = Image.fromarray(preds)
 
-if __name__=='__main__':
-    train('my_weight\models-5.58.h5')
-    # test()
+    denoising_img = cv2.fastNlMeansDenoisingColored(
+        np.array(preds), None, 3, 3, 7, 21)
+
+    # image.save(output_img_path, format='PNG')
+    cv2.imwrite(output_img_path,  cv2.cvtColor(denoising_img,
+                cv2.COLOR_RGB2BGR), [cv2.IMWRITE_PNG_COMPRESSION, 9])
+
+    
+if __name__ == '__main__':
+    # train(epochs=50, modelpath=modelLoadPath)
+    test(modelLoadPath, "E:\Images\WALLPAPER\\711l897jm4wz.jpg", 'output.png')
